@@ -26,7 +26,7 @@ from serial_comm import SerialCommunicator
 
 
 # ===== 配置 =====
-MODEL_PATH = "model/best.pt"       # 模型路径
+MODEL_PATH = "model/best1.pt"      # 模型路径
 CONF = 0.5                          # 置信度阈值
 IOU = 0.7                           # IoU 阈值
 IMAGE_WIDTH = 640                   # 图像宽度
