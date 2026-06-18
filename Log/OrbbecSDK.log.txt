@@ -1,0 +1,6 @@
+[06/18 21:24:07.834020][error][38914][OpenNIHostProtocol.cpp:36] Host Protocol support sub cmd datasize error!
+[06/18 21:25:37.213065][error][38998][OpenNIHostProtocol.cpp:36] Host Protocol support sub cmd datasize error!
+[06/18 21:28:22.062919][error][39419][OpenNIHostProtocol.cpp:36] Host Protocol support sub cmd datasize error!
+[06/18 21:29:58.172431][error][39709][OpenNIHostProtocol.cpp:36] Host Protocol support sub cmd datasize error!
+[06/18 21:30:57.455670][critical][39787][FrameBufferManager.cpp:88] Alloc frame buffer failed! size=614871
+[06/18 21:34:03.045265][error][40262][OpenNIHostProtocol.cpp:36] Host Protocol support sub cmd datasize error!

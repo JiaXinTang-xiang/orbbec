@@ -1,0 +1,13 @@
+[project]
+name = "orbec-yolo-project"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "pyserial",
+    "torch",
+    "torchvision",
+    "ultralytics",
+]
