@@ -11,32 +11,47 @@ Orbbec + YOLO 目标检测与追踪主程序
 """
 
 import os
-# 抑制 OpenCV Qt 字体警告 (不影响功能)
 os.environ["QT_LOGGING_RULES"] = "qt.qpa.fonts=false"
 
 import cv2
 import json
+import time
+import threading
 import numpy as np
 from pathlib import Path
+from collections import deque
 from orbbec_camera import OrbbecCamera
-from detector import YOLODetector
+from detector_openvino import OpenVINODetector
 from pid_controller import PIDController
 from anti_light import filter_detections
-from serial_comm import SerialCommunicator
+from dm02_serial import DM02Serial, GRASP_QUAT_FORWARD, GRASP_QUAT_STOP
+
+try:
+    from serial_comm import SerialCommunicator
+except ImportError:
+    SerialCommunicator = None
+
+# ===== 检测器后端: "openvino" 或 "pytorch" =====
+DETECTOR_BACKEND = "pytorch"
+
+# ===== DM02 机械臂 =====
+USE_DM02 = False                # 是否启用 DM02
+DM02_PORT = "/dev/ttyACM0"     # DM02 串口路径
 
 
 # ===== 配置 =====
-MODEL_PATH = "model/best1.pt"      # 模型路径
-CONF = 0.5                          # 置信度阈值
-IOU = 0.7                           # IoU 阈值
-IMAGE_WIDTH = 640                   # 图像宽度
-IMAGE_HEIGHT = 480                  # 图像高度
-FPS = 30                            # 帧率
-SHOW_DEPTH = True                   # 是否显示深度图
-USE_PID = False                     # 是否启用 PID 追踪
-USE_SERIAL = False                  # 是否启用串口通讯
-SERIAL_PORT = "/dev/ttyUSB0"       # 串口路径
-MIN_VARIANCE = 100                  # 抗灯光最小方差阈值
+MODEL_PATH = "model/best.pt"       # 模型路径 (PyTorch)
+CONF = 0.5
+IOU = 0.7
+IMAGE_WIDTH = 640
+IMAGE_HEIGHT = 480
+FPS = 30
+SHOW_DEPTH = True
+USE_PID = False
+USE_SERIAL = False
+SERIAL_PORT = "/dev/ttyUSB0"
+MIN_VARIANCE = 100
+SKIP_FRAMES = 1  # 每 N 帧检测一次，1=逐帧检测
 
 # PID 参数
 pid_x = PIDController(kp=0.3, ki=0.0, kd=0.1, deadband=10)
@@ -102,7 +117,13 @@ def main():
 
     # ===== 初始化 =====
     camera = OrbbecCamera(width=IMAGE_WIDTH, height=IMAGE_HEIGHT, fps=FPS)
-    detector = YOLODetector(model_path=MODEL_PATH, conf=CONF, iou=IOU)
+
+    # 初始化检测器
+    if DETECTOR_BACKEND == "openvino":
+        detector = OpenVINODetector(model_path=MODEL_PATH, conf=CONF, iou=IOU)
+    else:
+        from detector import YOLODetector
+        detector = YOLODetector(model_path=MODEL_PATH, conf=CONF, iou=IOU)
 
     # 保存内参
     save_intrinsics(camera)
@@ -116,18 +137,46 @@ def main():
             print("串口打开失败，继续运行 (无串口模式)")
             ser = None
 
+    # DM02 初始化
+    dm02 = None
+    if USE_DM02:
+        dm02 = DM02Serial(port=DM02_PORT)
+        if not dm02.open():
+            print("DM02 串口打开失败，继续运行 (无 DM02 模式)")
+            dm02 = None
+
     print("\n按 q 退出")
     print("=" * 40)
 
     try:
+        frame_idx = 0
+        detections = []       # 保持上一帧检测结果
+        annotated = None
+        fps_t0 = time.time()
+        fps_counter = 0
+        fps_display = 0.0
+
         while True:
             # 获取帧
             color_image, depth_image, depth_frame_data = camera.get_frames()
             if color_image is None:
                 continue
 
-            # 同步 YOLO 推理
-            detections, annotated = detector.detect(color_image)
+            # 跳帧: 每 SKIP_FRAMES 帧检测一次
+            if frame_idx % SKIP_FRAMES == 0:
+                detections, annotated = detector.detect(color_image)
+            elif annotated is None:
+                annotated = color_image.copy()
+
+            frame_idx += 1
+
+            # FPS 统计
+            fps_counter += 1
+            if fps_counter >= 30:
+                elapsed = time.time() - fps_t0
+                fps_display = fps_counter / elapsed
+                fps_t0 = time.time()
+                fps_counter = 0
 
             # 抗灯光过滤
             detections = filter_detections(
@@ -178,6 +227,12 @@ def main():
                             ser, cx, cy, point_3d,
                             USE_PID, center_x, center_y
                         )
+
+                    # DM02 发送
+                    if dm02:
+                        x_mm, y_mm, z_mm = DM02Serial.camera_to_mm(
+                            point_3d['x'], point_3d['y'], point_3d['z'])
+                        dm02.send_position(x_mm, y_mm, z_mm)
                 else:
                     # 检测到目标但深度无效 - 打印调试信息
                     if depth_frame_data is not None:
@@ -202,14 +257,20 @@ def main():
                 ser.send(msg)
 
             # 显示图像
-            # 画面中心显示深度参考值
-            if depth_frame_data is not None:
-                ch, cw = depth_frame_data.shape
-                cv = depth_frame_data[ch//2, cw//2] * camera.depth_scale / 1000.0
-                cv2.putText(annotated, f"center depth: {cv:.2f}m",
-                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.7, (0, 255, 255), 2)
-            cv2.imshow("Orbbec + YOLO", annotated)
+            # 画面中心深度 + FPS
+            if annotated is not None:
+                info_lines = []
+                if depth_frame_data is not None:
+                    ch, cw = depth_frame_data.shape
+                    cv = depth_frame_data[ch//2, cw//2] * camera.depth_scale / 1000.0
+                    info_lines.append(f"center: {cv:.2f}m")
+                info_lines.append(f"FPS: {fps_display:.0f}")
+                if dm02 and dm02.is_open:
+                    info_lines.append("DM02: connected")
+                for i, txt in enumerate(info_lines):
+                    cv2.putText(annotated, txt, (10, 30 + i * 25),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.imshow("Orbbec + YOLO", annotated if annotated is not None else color_image)
 
             # 显示深度图
             if SHOW_DEPTH:
@@ -229,6 +290,11 @@ def main():
             msg[1], msg[2], msg[3], msg[4] = 127, 127, 127, 127
             ser.send(msg)
             ser.close()
+
+        # DM02 关闭
+        if dm02:
+            dm02.send_stop()
+            dm02.close()
 
         camera.stop()
         cv2.destroyAllWindows()

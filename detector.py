@@ -18,7 +18,11 @@ class YOLODetector:
             imgsz: 推理图像尺寸
         """
         self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-        self.model = YOLO(model_path).to(self.device)
+        # OpenVINO 模型自动检测 (目录名或 .xml 文件)
+        self.is_openvino = model_path.endswith('_openvino_model/') or model_path.endswith('.xml')
+        self.model = YOLO(model_path, task='detect' if self.is_openvino else None)
+        if not self.is_openvino:
+            self.model = self.model.to(self.device)
         self.conf = conf
         self.iou = iou
         self.imgsz = imgsz
