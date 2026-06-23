@@ -40,7 +40,7 @@ DM02_PORT = "/dev/ttyACM0"     # DM02 串口路径
 
 
 # ===== 配置 =====
-MODEL_PATH = "model/best.pt"       # 模型路径 (PyTorch)
+MODEL_PATH = "model/best2.pt"       # 模型路径 (PyTorch)
 CONF = 0.5
 IOU = 0.7
 IMAGE_WIDTH = 640
